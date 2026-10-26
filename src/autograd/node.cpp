@@ -274,9 +274,28 @@ void Node::backward() noexcept {
                 if (node->input(1) && node->input(1)->requires_grad()) {
                     const axon::tensor::Tensor& input = node->input(0)->data_;
                     const axon::tensor::Tensor& dy = node->grad_;
-                    axon::tensor::Tensor dy_t = dy.transpose(0, 1);
                     if (input.is_contiguous()) {
-                        axon::tensor::Tensor dweight = axon::ops::matmul(dy_t, input);
+                        size_t M = input.dim(0);
+                        size_t K = input.dim(1); // in_features
+                        size_t N = dy.dim(1);    // out_features
+
+                        int64_t dw_dims[2] = {static_cast<int64_t>(K), static_cast<int64_t>(N)};
+                        axon::tensor::Tensor dweight(dw_dims, 2, dy.dtype(), dy.device());
+                        dweight.zero();
+
+                        const float* in_ptr = input.data<float>();
+                        const float* dy_ptr = dy.data<float>();
+                        float* dw_ptr = dweight.data<float>();
+
+                        for (size_t k = 0; k < K; ++k) {
+                            for (size_t n = 0; n < N; ++n) {
+                                float sum = 0.0f;
+                                for (size_t m = 0; m < M; ++m) {
+                                    sum += in_ptr[m * K + k] * dy_ptr[m * N + n];
+                                }
+                                dw_ptr[k * N + n] = sum;
+                            }
+                        }
                         node->input(1)->accumulate_grad(dweight);
                     }
                 }

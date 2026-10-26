@@ -300,4 +300,22 @@
 #define AXON_CONCAT_IMPL(a, b) a##b
 #define AXON_CONCAT(a, b) AXON_CONCAT_IMPL(a, b)
 
+// ============================================================================
+// 7. COPY / MOVE SEMANTICS HELPERS
+// ============================================================================
+
+// Deletes the copy constructor and copy-assignment operator for `ClassName`.
+// Used inside a class body on types that are move-only (e.g. Module, which
+// owns a fixed-size parameter array and should never be implicitly copied).
+// Usage: AXON_DISABLE_COPY(MyClass);
+#define AXON_DISABLE_COPY(ClassName) \
+    ClassName(const ClassName&) = delete; \
+    ClassName& operator=(const ClassName&) = delete
+
+// Deletes both copy and move semantics entirely (fully non-transferable type).
+#define AXON_DISABLE_COPY_AND_MOVE(ClassName) \
+    AXON_DISABLE_COPY(ClassName); \
+    ClassName(ClassName&&) = delete; \
+    ClassName& operator=(ClassName&&) = delete
+
 #endif // AXON_CORE_MACROS_HPP

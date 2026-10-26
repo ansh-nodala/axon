@@ -1,48 +1,132 @@
+#include "axon/core/memory.hpp"
 #include "axon/tensor/tensor.hpp"
 #include "axon/ops/elementwise.hpp"
 #include "axon/ops/matmul.hpp"
 #include "axon/ops/reductions.hpp"
 #include "axon/autograd/node.hpp"
+#include "axon/nn/module.hpp"
 #include <iostream>
 
-int main() {
-    std::cout << "=== AXON AUTOGRAD & FULL ENGINE INTEGRATION TEST ===" << std::endl;
+// Simple assertion helper for testing
+#define AXON_TEST_ASSERT(cond, msg) \
+    do { \
+        if (!(cond)) { \
+            std::cerr << "[FAIL] " << msg << " (Line: " << __LINE__ << ")" << std::endl; \
+            std::exit(1); \
+        } \
+    } while (0)
 
-    // 1. Test Tensor & Basic Ops
-    int64_t sizes_a[] = {2, 2};
-    axon::tensor::Tensor a_tensor(sizes_a, 2, axon::core::DType::Float32);
-    float* ptr_a = a_tensor.data<float>();
-    ptr_a[0] = 1.0f; ptr_a[1] = 2.0f;
-    ptr_a[2] = 3.0f; ptr_a[3] = 4.0f;
-
-    std::cout << "[1] Tensor Initialized | SIMD Aligned: " 
-              << (a_tensor.is_simd_aligned() ? "YES" : "NO") << std::endl;
-
-    // 2. Test Autograd Variables & Forward/Backward Pass (MSE Loss Training Test)
-    // Let's create a prediction and a target variable
-    axon::autograd::Variable pred(a_tensor, true); // requires_grad = true
-
-    int64_t sizes_t[] = {2, 2};
-    axon::tensor::Tensor t_tensor(sizes_t, 2, axon::core::DType::Float32);
-    float* ptr_t = t_tensor.data<float>();
-    ptr_t[0] = 1.5f; ptr_t[1] = 2.5f;
-    ptr_t[2] = 3.5f; ptr_t[3] = 4.5f;
+void test_tensor_and_memory() {
+    std::cout << "[*] Running Tensor & Memory Allocation Tests..." << std::endl;
     
-    axon::autograd::Variable target(t_tensor, false);
+    int64_t dims[2] = {2, 3};
+    axon::tensor::Tensor t(dims, 2, axon::core::DType::Float32, axon::core::DeviceType::CPU);
+    
+    AXON_TEST_ASSERT(t.ndim() == 2, "Tensor ndim should be 2");
+    AXON_TEST_ASSERT(t.dim(0) == 2, "Tensor dim(0) should be 2");
+    AXON_TEST_ASSERT(t.dim(1) == 3, "Tensor dim(1) should be 3");
+    AXON_TEST_ASSERT(t.num_elements() == 6, "Total elements should be 6");
 
-    // Compute MSE Loss: loss = mean((pred - target)^2)
-    axon::autograd::Variable loss = axon::autograd::mse_loss(pred, target);
+    t.zero();
+    float* ptr = t.data<float>();
+    for (size_t i = 0; i < 6; ++i) {
+        AXON_TEST_ASSERT(ptr[i] == 0.0f, "Tensor zero initialization failed");
+    }
 
-    std::cout << "[2] Forward Pass Computed. Loss Value: " 
-              << loss.data().data<float>()[0] << std::endl;
+    std::cout << "[+] Tensor & Memory Tests Passed Successfully!" << std::endl;
+}
 
-    // Trigger Backward Pass (Backpropagation)
-    loss.backward();
+void test_elementwise_and_matmul() {
+    std::cout << "[*] Running Elementwise & MatMul Tests..." << std::endl;
 
-    std::cout << "[3] Backward Pass Executed Successfully!" << std::endl;
-    std::cout << "    Gradient at Pred [0, 0] (Expected 2*(1.0-1.5)/4 = -0.25): " 
-              << pred.grad().data<float>()[0] << std::endl;
+    int64_t dims_a[2] = {2, 2};
+    int64_t dims_b[2] = {2, 2};
 
-    std::cout << "=== ALL AXON AUTOGRAD TESTS PASSED SUCCESSFULLY! ===" << std::endl;
+    axon::tensor::Tensor a(dims_a, 2, axon::core::DType::Float32, axon::core::DeviceType::CPU);
+    axon::tensor::Tensor b(dims_b, 2, axon::core::DType::Float32, axon::core::DeviceType::CPU);
+
+    a.data<float>()[0] = 1.0f; a.data<float>()[1] = 2.0f;
+    a.data<float>()[2] = 3.0f; a.data<float>()[3] = 4.0f;
+
+    b.data<float>()[0] = 5.0f; b.data<float>()[1] = 6.0f;
+    b.data<float>()[2] = 7.0f; b.data<float>()[3] = 8.0f;
+
+    // Test addition
+    axon::tensor::Tensor c = axon::ops::add(a, b);
+    AXON_TEST_ASSERT(c.data<float>()[0] == 6.0f, "Elementwise add failed at index 0");
+    AXON_TEST_ASSERT(c.data<float>()[3] == 12.0f, "Elementwise add failed at index 3");
+
+    // Test matrix multiplication
+    axon::tensor::Tensor mm = axon::ops::matmul(a, b);
+    // [1*5 + 2*7, 1*6 + 2*8] = [19, 22]
+    // [3*5 + 4*7, 3*6 + 4*8] = [43, 50]
+    AXON_TEST_ASSERT(mm.data<float>()[0] == 19.0f, "MatMul failed at [0,0]");
+    AXON_TEST_ASSERT(mm.data<float>()[1] == 22.0f, "MatMul failed at [0,1]");
+    AXON_TEST_ASSERT(mm.data<float>()[2] == 43.0f, "MatMul failed at [1,0]");
+    AXON_TEST_ASSERT(mm.data<float>()[3] == 50.0f, "MatMul failed at [1,1]");
+
+    std::cout << "[+] Elementwise & MatMul Tests Passed Successfully!" << std::endl;
+}
+
+void test_neural_network_and_optimizers() {
+    std::cout << "[*] Running Neural Network & Optimizer Integration Test..." << std::endl;
+
+    // 1. Initialize Linear Layer (in=2, out=1, bias=true)
+    axon::nn::Linear linear(2, 1, true);
+
+    // 2. Setup AdamW Optimizer
+    axon::nn::optim::AdamW optimizer(linear, 0.05f);
+
+    // 3. Create input [1, 2] -> [1.0, 2.0]
+    int64_t in_dims[2] = {1, 2};
+    axon::tensor::Tensor input_tensor(in_dims, 2, axon::core::DType::Float32, axon::core::DeviceType::CPU);
+    input_tensor.data<float>()[0] = 1.0f;
+    input_tensor.data<float>()[1] = 2.0f;
+    axon::autograd::Variable x(input_tensor, false);
+
+    // 4. Create target [1, 1] -> [5.0]
+    int64_t tgt_dims[2] = {1, 1};
+    axon::tensor::Tensor tgt_tensor(tgt_dims, 2, axon::core::DType::Float32, axon::core::DeviceType::CPU);
+    tgt_tensor.data<float>()[0] = 5.0f;
+    axon::autograd::Variable target(tgt_tensor, false);
+
+    float initial_loss = 0.0f;
+    float final_loss = 0.0f;
+
+    // Training loop for 5 steps
+    for (int step = 0; step < 5; ++step) {
+        optimizer.zero_grad();
+
+        axon::autograd::Variable pred = linear.forward(x);
+        axon::autograd::Variable loss = axon::autograd::mse_loss(pred, target);
+
+        float current_loss = loss.data().data<float>()[0];
+        if (step == 0) initial_loss = current_loss;
+        if (step == 4) final_loss = current_loss;
+
+        std::cout << "Step " << step << " | Loss: " << current_loss << std::endl;
+
+        loss.backward();
+        optimizer.step();
+    }
+
+    AXON_TEST_ASSERT(final_loss < initial_loss, "Optimizer failed to reduce loss over steps");
+
+    std::cout << "[+] Neural Network & Optimizer Tests Passed Successfully!" << std::endl;
+}
+
+int main() {
+    std::cout << "========================================" << std::endl;
+    std::cout << "   AXON FRAMEWORK COMPREHENSIVE TEST SUITE" << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    test_tensor_and_memory();
+    test_elementwise_and_matmul();
+    test_neural_network_and_optimizers();
+
+    std::cout << "========================================" << std::endl;
+    std::cout << "   ALL AXON TESTS PASSED SUCCESSFULLY!  " << std::endl;
+    std::cout << "========================================" << std::endl;
+
     return 0;
 }
